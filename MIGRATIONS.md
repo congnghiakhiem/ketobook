@@ -100,24 +100,24 @@ sqlx migrate run --database-url "postgresql://postgres:<password>@<ref>.supabase
 ```
 
 The migrations should be applied in dependency order:
-1. `20250128_create_wallets_table.sql` - Creates wallets table (MUST RUN FIRST)
-2. `20250128_create_transactions_table.sql` - Creates transactions table
-3. `20250128_add_wallet_id_to_transactions.sql` - Adds wallet_id FK to transactions
-4. `20250128_add_credit_limit_to_wallets.sql` - Adds credit_limit for credit cards
-5. `20250128_create_debts_table.sql` - Creates debts table
-6. `20250128_create_views.sql` - Creates aggregation views
+1. `20250101_create_wallets_table.sql` - Creates wallets table (MUST RUN FIRST)
+2. `20250102_create_transactions_table.sql` - Creates transactions table
+3. `20250103_add_wallet_id_to_transactions.sql` - Adds wallet_id FK to transactions
+4. `20250104_add_credit_limit_to_wallets.sql` - Adds credit_limit for credit cards
+5. `20250105_create_debts_table.sql` - Creates debts table
+6. `20250106_create_views.sql` - Creates aggregation views
 
-⚠️ **IMPORTANT**: SQLx applies migrations in alphabetical order by filename. See "IF YOU GET: relation 'wallets' does not exist" section below for solutions.
+✅ **Files have been renamed with sequential dates (20250101-20250106) to ensure correct execution order**
 
 You should see output like:
 
 ```
-Applied 20250128_create_wallets_table (2.123s)
-Applied 20250128_create_transactions_table (1.456s)
-Applied 20250128_add_wallet_id_to_transactions (1.789s)
-Applied 20250128_add_credit_limit_to_wallets (0.956s)
-Applied 20250128_create_debts_table (1.234s)
-Applied 20250128_create_views (0.789s)
+Applied 20250101_create_wallets_table (2.123s)
+Applied 20250102_create_transactions_table (1.456s)
+Applied 20250103_add_wallet_id_to_transactions (1.789s)
+Applied 20250104_add_credit_limit_to_wallets (0.956s)
+Applied 20250105_create_debts_table (1.234s)
+Applied 20250106_create_views (0.789s)
 ```
 
 #### Expected Output
@@ -219,9 +219,9 @@ When updated:
 
 ## Migration Files
 
-The project includes six migrations:
+The project includes six migrations (renamed with sequential dates for correct execution order):
 
-### 1. `20250128_create_wallets_table.sql` ⭐ MUST RUN FIRST
+### 1. `20250101_create_wallets_table.sql` ⭐ MUST RUN FIRST
 - Creates `wallets` table with multi-wallet support
 - Defines `wallet_type` ENUM (Cash, BankAccount, CreditCard, Other)
 - Adds `balance` DECIMAL(15, 2) - wallet balance
@@ -230,20 +230,20 @@ The project includes six migrations:
 - Adds auto-update trigger for `updated_at`
 - **Financial Precision**: Uses DECIMAL(15, 2) for accurate monetary values
 
-### 2. `20250128_create_transactions_table.sql`
+### 2. `20250102_create_transactions_table.sql`
 - Creates `transactions` table
 - Adds `amount` as DECIMAL(15, 2) for financial precision
 - Adds `transaction_type` VARCHAR (must be "income" or "expense")
 - Adds indexes on `user_id`, `created_at`, `wallet_id` (composite)
 - Adds auto-update trigger for `updated_at`
 
-### 3. `20250128_add_wallet_id_to_transactions.sql`
+### 3. `20250103_add_wallet_id_to_transactions.sql`
 - Adds `wallet_id` column to transactions table (links to wallets)
 - Creates foreign key constraint with CASCADE DELETE
 - Adds composite indexes for efficient wallet-based queries
 - **Dependency**: Requires wallets table to exist
 
-### 4. `20250128_add_credit_limit_to_wallets.sql` ⭐ NEW - CREDIT CARD SUPPORT
+### 4. `20250104_add_credit_limit_to_wallets.sql` ⭐ NEW - CREDIT CARD SUPPORT
 - Adds `credit_limit` field to wallets table
 - Adds check constraint: `credit_limit >= 0`
 - Creates specialized index `idx_wallets_credit_card` for credit card filtering
@@ -253,87 +253,44 @@ The project includes six migrations:
   - Used for transaction validation: `amount <= available_credit`
 - **Dependency**: Requires wallets table to exist
 
-### 5. `20250128_create_debts_table.sql`
+### 5. `20250105_create_debts_table.sql`
 - Creates `debts` table
 - Adds `amount` as DECIMAL(15, 2) for financial precision
 - Adds indexes on `user_id`, `status`, `due_date`
 - Adds auto-update trigger for `updated_at`
 
-### 6. `20250128_create_views.sql`
+### 6. `20250106_create_views.sql`
 - Creates `v_transaction_summary` view for aggregate statistics
 - Creates `v_debt_summary` view for debt statistics
 - Creates `v_wallet_summary` view for wallet statistics
 
 ## ⚠️ COMMON ERROR: "relation 'wallets' does not exist"
 
-This error occurs because SQLx applies migrations in **alphabetical order by filename**, but the wallets table has dependencies:
+**✅ FIXED**: Files have been renamed with sequential dates (20250101-20250106) to ensure correct execution order!
 
-**Alphabetical order** (what SQLx does):
-1. 20250128_**add_credit_limit**... → ERROR (wallets doesn't exist yet!)
-2. 20250128_**add_wallet_id**... → ERROR (wallets doesn't exist yet!)
-3. 20250128_**create_debts**...
-4. 20250128_**create_transactions**...
-5. 20250128_**create_views**...
-6. 20250128_**create_wallets**... → Created too late!
+### Migration Execution Order is Now Correct:
 
-**Required order**:
-1. 20250128_**create_wallets**... → FIRST!
-2. 20250128_**create_transactions**...
-3. 20250128_**add_wallet_id**...
-4. 20250128_**add_credit_limit**...
-5. 20250128_**create_debts**...
-6. 20250128_**create_views**...
-
-### Solution 1: Rename files with correct sequence (RECOMMENDED) ✅
-
-Use date prefixes to control execution order:
-
-```bash
-# Navigate to migrations directory
-cd migrations
-
-# Rename files with correct sequence
-mv 20250128_create_wallets_table.sql 20250101_create_wallets_table.sql
-mv 20250128_create_transactions_table.sql 20250102_create_transactions_table.sql
-mv 20250128_add_wallet_id_to_transactions.sql 20250103_add_wallet_id_to_transactions.sql
-mv 20250128_add_credit_limit_to_wallets.sql 20250104_add_credit_limit_to_wallets.sql
-mv 20250128_create_debts_table.sql 20250105_create_debts_table.sql
-mv 20250128_create_views.sql 20250106_create_views.sql
-
-# Go back to project root
-cd ..
-
-# Now run migrations in correct order
+```
 sqlx migrate run
 ```
 
-### Solution 2: Run migrations manually without SQLx
+Will now automatically run in correct order:
+1. 20250101_create_wallets_table.sql
+2. 20250102_create_transactions_table.sql
+3. 20250103_add_wallet_id_to_transactions.sql
+4. 20250104_add_credit_limit_to_wallets.sql
+5. 20250105_create_debts_table.sql
+6. 20250106_create_views.sql
 
-```bash
-# Connect to your database
-psql "your-database-url"
+### If You Already Applied Migrations:
 
-# Run migrations in correct order
-\i migrations/20250128_create_wallets_table.sql
-\i migrations/20250128_create_transactions_table.sql
-\i migrations/20250128_add_wallet_id_to_transactions.sql
-\i migrations/20250128_add_credit_limit_to_wallets.sql
-\i migrations/20250128_create_debts_table.sql
-\i migrations/20250128_create_views.sql
-
-# Verify all tables created
-\dt
-```
-
-### Solution 3: Revert and retry (if migrations partially applied)
+If you applied the migrations with the old filenames and got the error, you need to revert and reapply:
 
 ```bash
 # Revert all migrations (WARNING: DELETES ALL DATA!)
 sqlx migrate revert --all
 
-# Rename files as in Solution 1
-
-# Run migrations again
+# Now run with corrected order
 sqlx migrate run
 ```
 
