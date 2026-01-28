@@ -6,9 +6,9 @@
 -- STEP 1: Create ENUM types (no dependencies)
 -- ============================================================================
 
-CREATE TYPE IF NOT EXISTS wallet_type AS ENUM (
+CREATE TYPE wallet_type AS ENUM (
     'Cash',
-    'BankAccount', 
+    'BankAccount',
     'CreditCard',
     'Other'
 );
@@ -19,7 +19,7 @@ COMMENT ON TYPE wallet_type IS 'Wallet types for organizing user finances';
 -- STEP 2: Create wallets table (depends on wallet_type ENUM)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS wallets (
+CREATE TABLE wallets (
     id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
     user_id VARCHAR(100) NOT NULL,
     name VARCHAR(255) NOT NULL,
@@ -29,10 +29,8 @@ CREATE TABLE IF NOT EXISTS wallets (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     
-    -- Constraints
     CONSTRAINT balance_non_negative CHECK (balance >= 0),
-    CONSTRAINT credit_limit_non_negative CHECK (credit_limit >= 0),
-    CONSTRAINT user_id_not_empty CHECK (user_id != '')
+    CONSTRAINT credit_limit_non_negative CHECK (credit_limit >= 0)
 );
 
 COMMENT ON TABLE wallets IS 'User wallets for managing different account types (Cash, Bank, Credit Card, Other)';
@@ -45,14 +43,10 @@ COMMENT ON COLUMN wallets.credit_limit IS 'Credit limit for CreditCard wallets. 
 COMMENT ON COLUMN wallets.created_at IS 'Timestamp when wallet was created (UTC 2026)';
 COMMENT ON COLUMN wallets.updated_at IS 'Timestamp when wallet was last updated (UTC 2026)';
 
--- Create indexes for efficient queries
-CREATE INDEX IF NOT EXISTS idx_wallets_user_id ON wallets(user_id);
-CREATE INDEX IF NOT EXISTS idx_wallets_wallet_type ON wallets(wallet_type);
-CREATE INDEX IF NOT EXISTS idx_wallets_created_at ON wallets(created_at);
-CREATE INDEX IF NOT EXISTS idx_wallets_credit_card 
-    ON wallets(id) WHERE wallet_type = 'CreditCard';
+CREATE INDEX idx_wallets_user_id ON wallets(user_id);
+CREATE INDEX idx_wallets_wallet_type ON wallets(wallet_type);
+CREATE INDEX idx_wallets_created_at ON wallets(created_at);
 
--- Create trigger to auto-update updated_at
 CREATE OR REPLACE FUNCTION update_wallets_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -71,7 +65,7 @@ CREATE TRIGGER trigger_wallets_updated_at
 -- STEP 3: Create transactions table (depends on wallets via FK)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE transactions (
     id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
     user_id VARCHAR(100) NOT NULL,
     wallet_id VARCHAR(36) NOT NULL,
@@ -82,14 +76,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     
-    -- Foreign Key constraint (CASCADE DELETE when wallet is deleted)
     CONSTRAINT fk_transactions_wallet_id FOREIGN KEY (wallet_id) 
         REFERENCES wallets(id) ON DELETE CASCADE,
-    
-    -- Data integrity constraints
     CONSTRAINT amount_positive CHECK (amount > 0),
-    CONSTRAINT valid_transaction_type CHECK (transaction_type IN ('income', 'expense')),
-    CONSTRAINT user_id_not_empty CHECK (user_id != '')
+    CONSTRAINT valid_transaction_type CHECK (transaction_type IN ('income', 'expense'))
 );
 
 COMMENT ON TABLE transactions IS 'Financial transactions recorded against wallet accounts';
@@ -103,17 +93,11 @@ COMMENT ON COLUMN transactions.description IS 'Additional details about the tran
 COMMENT ON COLUMN transactions.created_at IS 'Timestamp when transaction was created (UTC 2026)';
 COMMENT ON COLUMN transactions.updated_at IS 'Timestamp when transaction was last updated (UTC 2026)';
 
--- Create indexes for efficient queries
-CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_wallet_id ON transactions(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
-CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(transaction_type);
-CREATE INDEX IF NOT EXISTS idx_transactions_user_wallet 
-    ON transactions(user_id, wallet_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_user_created 
-    ON transactions(user_id, created_at DESC);
+CREATE INDEX idx_transactions_user_id ON transactions(user_id);
+CREATE INDEX idx_transactions_wallet_id ON transactions(wallet_id);
+CREATE INDEX idx_transactions_created_at ON transactions(created_at);
+CREATE INDEX idx_transactions_type ON transactions(transaction_type);
 
--- Create trigger to auto-update updated_at
 CREATE OR REPLACE FUNCTION update_transactions_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -132,7 +116,7 @@ CREATE TRIGGER trigger_transactions_updated_at
 -- STEP 4: Create debts table (depends on wallets via FK)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS debts (
+CREATE TABLE debts (
     id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
     user_id VARCHAR(100) NOT NULL,
     wallet_id VARCHAR(36),
@@ -144,15 +128,11 @@ CREATE TABLE IF NOT EXISTS debts (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     
-    -- Foreign Key constraint to wallet (if debt is tied to a specific wallet)
     CONSTRAINT fk_debts_wallet_id FOREIGN KEY (wallet_id) 
         REFERENCES wallets(id) ON DELETE SET NULL,
-    
-    -- Data integrity constraints
     CONSTRAINT amount_positive CHECK (amount > 0),
     CONSTRAINT interest_rate_non_negative CHECK (interest_rate >= 0),
-    CONSTRAINT valid_status CHECK (status IN ('active', 'paid', 'cancelled')),
-    CONSTRAINT user_id_not_empty CHECK (user_id != '')
+    CONSTRAINT valid_status CHECK (status IN ('active', 'paid', 'cancelled'))
 );
 
 COMMENT ON TABLE debts IS 'Debt tracking for loans, credits, and obligations';
@@ -167,17 +147,11 @@ COMMENT ON COLUMN debts.status IS 'Debt status: active, paid, or cancelled';
 COMMENT ON COLUMN debts.created_at IS 'Timestamp when debt was recorded (UTC 2026)';
 COMMENT ON COLUMN debts.updated_at IS 'Timestamp when debt was last updated (UTC 2026)';
 
--- Create indexes for efficient queries
-CREATE INDEX IF NOT EXISTS idx_debts_user_id ON debts(user_id);
-CREATE INDEX IF NOT EXISTS idx_debts_wallet_id ON debts(wallet_id);
-CREATE INDEX IF NOT EXISTS idx_debts_status ON debts(status);
-CREATE INDEX IF NOT EXISTS idx_debts_due_date ON debts(due_date);
-CREATE INDEX IF NOT EXISTS idx_debts_user_status 
-    ON debts(user_id, status);
-CREATE INDEX IF NOT EXISTS idx_debts_user_due 
-    ON debts(user_id, due_date) WHERE due_date IS NOT NULL;
+CREATE INDEX idx_debts_user_id ON debts(user_id);
+CREATE INDEX idx_debts_wallet_id ON debts(wallet_id);
+CREATE INDEX idx_debts_status ON debts(status);
+CREATE INDEX idx_debts_due_date ON debts(due_date);
 
--- Create trigger to auto-update updated_at
 CREATE OR REPLACE FUNCTION update_debts_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -196,7 +170,6 @@ CREATE TRIGGER trigger_debts_updated_at
 -- Optional: Create aggregation views for statistics
 -- ============================================================================
 
--- Transaction summary view
 CREATE OR REPLACE VIEW v_transaction_summary AS
 SELECT 
     user_id,
@@ -212,7 +185,6 @@ GROUP BY user_id, wallet_id, transaction_type;
 
 COMMENT ON VIEW v_transaction_summary IS 'Aggregated transaction statistics by user, wallet, and type';
 
--- Debt summary view
 CREATE OR REPLACE VIEW v_debt_summary AS
 SELECT 
     user_id,
@@ -226,7 +198,6 @@ GROUP BY user_id, status;
 
 COMMENT ON VIEW v_debt_summary IS 'Aggregated debt statistics by user and status';
 
--- Wallet summary view with calculated available credit
 CREATE OR REPLACE VIEW v_wallet_summary AS
 SELECT 
     w.id,
@@ -236,7 +207,7 @@ SELECT
     w.balance,
     w.credit_limit,
     CASE 
-        WHEN w.wallet_type = 'CreditCard' AND w.credit_limit > 0 
+        WHEN w.wallet_type::text = 'CreditCard' AND w.credit_limit > 0 
         THEN (w.credit_limit - w.balance)
         ELSE w.balance 
     END as available_balance,
