@@ -26,23 +26,35 @@ async fn main() -> std::io::Result<()> {
         .expect("Failed to initialize database pool");
     log::info!("Database pool initialized successfully");
 
-    // Initialize Redis cache manager
-    let cache_manager = CacheManager::new(&config.redis_url)
-        .await
-        .expect("Failed to initialize Redis cache");
-    log::info!("Redis cache initialized successfully");
+    // Initialize Redis cache manager (optional - continue without cache if connection fails)
+    let cache_manager = match CacheManager::new(&config.redis_url).await {
+        Ok(cache) => {
+            log::info!("Redis cache initialized successfully");
+            Some(cache)
+        }
+        Err(e) => {
+            log::warn!("Failed to initialize Redis cache: {}. Continuing without cache.", e);
+            None
+        }
+    };
 
     let server_address = config.server_address();
     log::info!("Starting server on {}", server_address);
 
     // Create and start HTTP server
     HttpServer::new(move || {
-        App::new()
+        let mut app = App::new()
             // Add logging middleware
             .wrap(middleware::Logger::default())
-            // Share database pool and cache manager across requests
-            .app_data(web::Data::new(db_pool.get_pool().clone()))
-            .app_data(web::Data::new(cache_manager.get_connection_manager().clone()))
+            // Share database pool across requests
+            .app_data(web::Data::new(db_pool.get_pool().clone()));
+
+        // Add cache manager if available
+        if let Some(ref cache) = cache_manager {
+            app = app.app_data(web::Data::new(cache.get_connection_manager().clone()));
+        }
+
+        app
             // Health check endpoint
             .route("/health", web::get().to(health_check))
             // Configure wallet routes
