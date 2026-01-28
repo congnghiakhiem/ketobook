@@ -1,8 +1,21 @@
 # KetoBook Multi-Wallet API - Quick Reference
 
+## Financial Precision & Credit Card Support
+
+**All monetary values use BigDecimal for precision:**
+- Accurate to 2 decimal places (cents)
+- No floating-point rounding errors
+- Safe for financial calculations
+
+**Credit Card Wallet Type:**
+- `balance` field represents current debt (0 = no debt, limit = fully used)
+- `credit_limit` field specifies maximum spending
+- Available credit = credit_limit - balance
+- Transactions validated against available credit
+
 ## Wallet Management Endpoints
 
-### Create Wallet
+### Create Bank Account Wallet
 ```bash
 POST /api/wallets
 Content-Type: application/json
@@ -11,7 +24,7 @@ Content-Type: application/json
   "user_id": "user123",
   "name": "My Checking Account",
   "wallet_type": "BankAccount",
-  "balance": 5000.00
+  "balance": "5000.00"
 }
 
 # Response: 201 Created
@@ -21,13 +34,45 @@ Content-Type: application/json
     "id": "wallet-uuid-1",
     "user_id": "user123",
     "name": "My Checking Account",
-    "balance": 5000.00,
+    "balance": "5000.00",
+    "credit_limit": null,
     "wallet_type": "BankAccount",
     "created_at": "2026-01-28T12:00:00Z",
     "updated_at": "2026-01-28T12:00:00Z"
   }
 }
 ```
+
+### Create Credit Card Wallet (NEW)
+```bash
+POST /api/wallets
+Content-Type: application/json
+
+{
+  "user_id": "user123",
+  "name": "Visa Premium",
+  "wallet_type": "CreditCard",
+  "balance": "2500.00",
+  "credit_limit": "10000.00"
+}
+
+# Response: 201 Created
+{
+  "success": true,
+  "data": {
+    "id": "wallet-uuid-cc",
+    "user_id": "user123",
+    "name": "Visa Premium",
+    "balance": "2500.00",           # Current debt
+    "credit_limit": "10000.00",     # Credit limit
+    "wallet_type": "CreditCard",
+    "created_at": "2026-01-28T12:00:00Z",
+    "updated_at": "2026-01-28T12:00:00Z"
+  }
+}
+```
+
+**Note:** Available credit = 10000.00 - 2500.00 = 7500.00
 
 ### Get All Wallets
 ```bash
@@ -41,7 +86,8 @@ GET /api/wallets/user/user123
       "id": "wallet-uuid-1",
       "user_id": "user123",
       "name": "Checking",
-      "balance": 5000.00,
+      "balance": "5000.00",
+      "credit_limit": null,
       "wallet_type": "BankAccount",
       "created_at": "2026-01-28T10:00:00Z",
       "updated_at": "2026-01-28T12:00:00Z"
@@ -49,8 +95,19 @@ GET /api/wallets/user/user123
     {
       "id": "wallet-uuid-2",
       "user_id": "user123",
+      "name": "Visa Premium",
+      "balance": "2500.00",
+      "credit_limit": "10000.00",
+      "wallet_type": "CreditCard",
+      "created_at": "2026-01-28T11:00:00Z",
+      "updated_at": "2026-01-28T11:30:00Z"
+    },
+    {
+      "id": "wallet-uuid-3",
+      "user_id": "user123",
       "name": "Cash Wallet",
-      "balance": 200.00,
+      "balance": "200.00",
+      "credit_limit": null,
       "wallet_type": "Cash",
       "created_at": "2026-01-28T11:00:00Z",
       "updated_at": "2026-01-28T11:30:00Z"
@@ -61,17 +118,18 @@ GET /api/wallets/user/user123
 
 ### Get Specific Wallet
 ```bash
-GET /api/wallets/user123/wallet-uuid-1
+GET /api/wallets/user123/wallet-uuid-cc
 
 # Response: 200 OK
 {
   "success": true,
   "data": {
-    "id": "wallet-uuid-1",
+    "id": "wallet-uuid-cc",
     "user_id": "user123",
-    "name": "Checking",
-    "balance": 5000.00,
-    "wallet_type": "BankAccount",
+    "name": "Visa Premium",
+    "balance": "2500.00",
+    "credit_limit": "10000.00",
+    "wallet_type": "CreditCard",
     "created_at": "2026-01-28T10:00:00Z",
     "updated_at": "2026-01-28T12:00:00Z"
   }
@@ -85,7 +143,7 @@ Content-Type: application/json
 
 {
   "name": "Primary Checking",
-  "balance": 5250.00
+  "balance": "5250.00"
 }
 
 # Response: 200 OK
@@ -95,9 +153,11 @@ Content-Type: application/json
     "id": "wallet-uuid-1",
     "user_id": "user123",
     "name": "Primary Checking",
-    "balance": 5250.00,
+    "balance": "5250.00",
+    "credit_limit": null,
     "wallet_type": "BankAccount",
     "created_at": "2026-01-28T10:00:00Z",
+```
     "updated_at": "2026-01-28T12:30:00Z"
   }
 }
@@ -111,18 +171,20 @@ DELETE /api/wallets/user123/wallet-uuid-1
 # (Also cascades: deletes all transactions associated with this wallet)
 ```
 
-## Transaction Endpoints (Updated)
+## Transaction Endpoints (Enhanced with Atomic Operations)
 
-### Create Transaction (Now Requires Wallet)
+### Create Transaction with Balance Validation
+
+**Standard Wallet (BankAccount/Cash):**
 ```bash
 POST /api/transactions
 Content-Type: application/json
 
 {
   "user_id": "user123",
-  "wallet_id": "wallet-uuid-1",      # NEW: Required field
-  "amount": 50.00,
-  "transaction_type": "expense",     # "income" or "expense"
+  "wallet_id": "wallet-uuid-1",
+  "amount": "50.00",
+  "transaction_type": "expense",
   "category": "groceries",
   "description": "Weekly shopping"
 }
@@ -133,8 +195,8 @@ Content-Type: application/json
   "data": {
     "id": "txn-uuid-1",
     "user_id": "user123",
-    "wallet_id": "wallet-uuid-1",    # NEW
-    "amount": 50.00,
+    "wallet_id": "wallet-uuid-1",
+    "amount": "50.00",
     "transaction_type": "expense",
     "category": "groceries",
     "description": "Weekly shopping",
@@ -143,18 +205,75 @@ Content-Type: application/json
   }
 }
 
-# Note: Wallet balance automatically updated!
+# Wallet balance automatically updated (atomic transaction):
 # wallet-uuid-1 balance: 5000.00 - 50.00 = 4950.00
 ```
 
-### Update Transaction (Can Change Wallet)
+**Credit Card Wallet (Available Credit Validation):**
+```bash
+POST /api/transactions
+Content-Type: application/json
+
+{
+  "user_id": "user123",
+  "wallet_id": "wallet-uuid-cc",
+  "amount": "500.00",
+  "transaction_type": "expense",
+  "category": "dining",
+  "description": "Dinner"
+}
+
+# Response: 201 Created
+{
+  "success": true,
+  "data": {
+    "id": "txn-uuid-cc-1",
+    "user_id": "user123",
+    "wallet_id": "wallet-uuid-cc",
+    "amount": "500.00",
+    "transaction_type": "expense",
+    "category": "dining",
+    "description": "Dinner",
+    "created_at": "2026-01-28T13:00:00Z",
+    "updated_at": "2026-01-28T13:00:00Z"
+  }
+}
+
+# Credit card balance automatically updated (atomic transaction):
+# wallet-uuid-cc balance: 2500.00 + 500.00 = 3000.00 (more debt)
+# Available credit: 10000.00 - 3000.00 = 7000.00
+```
+
+**Insufficient Funds/Credit Error:**
+```bash
+POST /api/transactions
+Content-Type: application/json
+
+{
+  "user_id": "user123",
+  "wallet_id": "wallet-uuid-cc",
+  "amount": "8000.00",          # More than available credit (7000.00)
+  "transaction_type": "expense",
+  "category": "shopping",
+  "description": "Large purchase"
+}
+
+# Response: 400 Bad Request
+{
+  "success": false,
+  "error": "Insufficient available credit. Required: 8000.00, Available: 7000.00"
+}
+# Transaction REJECTED - wallet balance unchanged (atomic rollback)
+```
+
+### Update Transaction (Can Change Wallet & Amount)
 ```bash
 PUT /api/transactions/user123/txn-uuid-1
 Content-Type: application/json
 
 {
-  "wallet_id": "wallet-uuid-2",     # NEW: Move to different wallet
-  "amount": 75.00,
+  "wallet_id": "wallet-uuid-cc",    # Move to credit card
+  "amount": "75.00",                 # Update amount
   "category": "dining",
   "description": "Lunch at restaurant"
 }
@@ -165,8 +284,8 @@ Content-Type: application/json
   "data": {
     "id": "txn-uuid-1",
     "user_id": "user123",
-    "wallet_id": "wallet-uuid-2",    # Changed!
-    "amount": 75.00,
+    "wallet_id": "wallet-uuid-cc",
+    "amount": "75.00",
     "transaction_type": "expense",
     "category": "dining",
     "description": "Lunch at restaurant",
@@ -175,19 +294,19 @@ Content-Type: application/json
   }
 }
 
-# Note: Wallet balances updated automatically!
-# wallet-uuid-1 balance: 4950.00 + 50.00 = 5000.00  (old amount reversed)
-# wallet-uuid-2 balance: 200.00 - 75.00 = 125.00    (new amount applied)
+# Wallet balances updated atomically:
+# wallet-uuid-1: 4950.00 + 50.00 = 5000.00 (old amount reversed)
+# wallet-uuid-cc: 3000.00 + 75.00 = 3075.00 (new amount applied)
 ```
 
-### Delete Transaction
+### Delete Transaction (Reverses Impact)
 ```bash
 DELETE /api/transactions/user123/txn-uuid-1
 
 # Response: 204 No Content
 
-# Note: Wallet balance automatically updated!
-# wallet-uuid-2 balance: 125.00 + 75.00 = 200.00 (amount reversed)
+# Wallet balance atomically reversed:
+# wallet-uuid-cc: 3075.00 - 75.00 = 3000.00 (expense reversed)
 ```
 
 ## Wallet Types
@@ -195,8 +314,86 @@ DELETE /api/transactions/user123/txn-uuid-1
 Available wallet types:
 - **Cash** - Physical cash wallet
 - **BankAccount** - Bank savings/checking account
-- **CreditCard** - Credit card
+- **CreditCard** - Credit card with credit_limit field
 - **Other** - Any other type of account
+
+## Atomic Transaction Guarantees
+
+### What are Atomic Transactions?
+
+All transaction operations (create, update, delete) use PostgreSQL atomic transactions (BEGIN/COMMIT) to ensure data consistency:
+
+- **All-or-Nothing:** Either the entire operation succeeds or it completely rolls back
+- **No Partial Updates:** Never a situation where transaction is created but balance isn't updated
+- **Consistency:** Wallet balance always reflects transaction history
+- **Safety:** Automatic rollback on any error
+
+### Create Transaction Flow
+```
+1. BEGIN database transaction
+2. Fetch wallet (lock for consistency)
+3. Validate:
+   - Wallet exists and belongs to user
+   - Amount > 0
+   - Transaction type is "income" or "expense"
+   - For CreditCard: available_credit >= amount
+   - For other: balance >= amount (expenses only)
+4. IF validation fails:
+   - ROLLBACK automatically
+   - Return error to client
+   - Wallet unchanged ✓
+5. IF validation passes:
+   - INSERT transaction record
+   - UPDATE wallet balance (atomic with transaction insert)
+   - COMMIT (all changes permanent)
+   - Return success to client
+```
+
+### Wallet Balance Validation
+
+**Regular Wallets (Cash, BankAccount, Other):**
+- Income transactions: Always allowed (balance increases)
+- Expense transactions: Only allowed if `balance >= amount`
+- Prevents negative balance
+
+**Credit Card Wallets:**
+- Income transactions: Always allowed (reduces debt)
+- Expense transactions: Only allowed if `available_credit >= amount`
+  - Available credit = `credit_limit - balance`
+  - Prevents exceeding credit limit
+
+### Update Transaction Flow
+```
+1. BEGIN database transaction
+2. Fetch current transaction
+3. IF wallet changed OR amount changed:
+   - Reverse old wallet balance (undo original transaction)
+   - Validate new wallet/amount combination
+   - IF validation fails: ROLLBACK, return error
+   - Apply new balance to new wallet
+4. Commit all balance changes atomically
+5. Invalidate relevant caches
+```
+
+### Delete Transaction Flow
+```
+1. BEGIN database transaction
+2. Fetch transaction details
+3. Reverse balance on wallet:
+   - If income: subtract amount
+   - If expense: add amount
+4. Delete transaction record
+5. COMMIT (balance reversal + deletion atomic)
+6. Invalidate caches
+```
+
+### Cache Invalidation
+
+After any transaction operation:
+- Invalidate wallet-specific cache: `wallet:{user_id}:{wallet_id}`
+- Invalidate user wallet list: `wallets:{user_id}`
+- Invalidate user transactions: `transactions:{user_id}`
+- Next API call will fetch fresh data from database
 
 ## Example Workflow
 

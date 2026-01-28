@@ -12,11 +12,18 @@ CREATE TABLE wallets (
     user_id VARCHAR NOT NULL,
     name VARCHAR(100) NOT NULL,
     balance DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+    credit_limit DECIMAL(15, 2) DEFAULT 0.00,
     wallet_type wallet_type NOT NULL (Cash | BankAccount | CreditCard | Other),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+**New Field for Credit Cards:**
+- `credit_limit DECIMAL(15, 2)` - Credit card limit (0.00 for non-credit wallets)
+  - For CreditCard wallets: `balance` represents current debt (0 = no debt, limit = fully used)
+  - Available credit = limit - balance
+  - For other wallet types: `credit_limit` is ignored (0.00)
 
 **Indexes:**
 - `idx_wallets_user_id` - Query wallets by user
@@ -55,6 +62,14 @@ ADD CONSTRAINT fk_transactions_wallet_id FOREIGN KEY (wallet_id) REFERENCES wall
 - Adds indexes for wallet-based queries
 - Creates composite indexes for performance
 
+### 3. `20250128_add_credit_limit_to_wallets.sql` (NEW)
+- Adds `credit_limit DECIMAL(15, 2)` column to wallets table
+- Sets default value to 0.00
+- Adds constraint: credit_limit >= 0
+- Creates index for credit card queries: `idx_wallets_credit_card`
+  - Filters by `wallet_type = 'CreditCard'` for efficient credit card lookups
+- Adds column comments explaining semantics
+
 ## Rust Model Changes
 
 ### New: `WalletType` Enum
@@ -65,10 +80,17 @@ pub enum WalletType {
     CreditCard,
     Other,
 }
+
+impl WalletType {
+    pub fn is_credit_card(&self) -> bool {
+        matches!(self, WalletType::CreditCard)
+    }
+}
 ```
 - Implements `as_str()` for database conversion
 - Implements `from_str()` for string parsing
 - Serde serialization for JSON API responses
+- `is_credit_card()` method for balance validation logic
 
 ### New: `Wallet` Struct
 ```rust
@@ -76,27 +98,49 @@ pub struct Wallet {
     pub id: String,
     pub user_id: String,
     pub name: String,
-    pub balance: f64,
-    pub wallet_type: String,  // Stored as string from DB
+    pub balance: BigDecimal,          // BigDecimal for financial precision
+    pub credit_limit: Option<BigDecimal>,  // NEW: Credit card limit
+    pub wallet_type: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
+
+impl Wallet {
+    /// For CreditCard wallets: returns limit - balance (available credit)
+    /// For other wallets: returns balance
+    pub fn available_balance(&self) -> BigDecimal {
+        // Implementation...
+    }
+}
 ```
+
+**Key Changes:**
+- **Financial Precision:** All balance fields use `BigDecimal` instead of `f64`
+  - Prevents floating-point precision errors
+  - Accurate to 2 decimal places (cents)
+- **Credit Card Support:** `credit_limit` field (optional)
+  - Only populated for CreditCard wallet type
+  - Used to calculate available credit
+- **Available Balance Method:** Handles different wallet semantics
 
 ### Updated: `Transaction` Struct
 ```rust
 pub struct Transaction {
     pub id: String,
     pub user_id: String,
-    pub wallet_id: Option<String>,  // NEW: Links to wallet
-    pub amount: f64,
-    pub transaction_type: String,
+    pub wallet_id: Option<String>,
+    pub amount: BigDecimal,           // BigDecimal for precision
+    pub transaction_type: String,     // "income" or "expense"
     pub category: String,
     pub description: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 ```
+
+**Key Changes:**
+- **Amount Field:** Changed from `f64` to `BigDecimal`
+- **Type Validation:** Only accepts "income" or "expense"
 
 ### Request/Response Models
 
@@ -105,8 +149,9 @@ pub struct Transaction {
 pub struct CreateWalletRequest {
     pub user_id: String,
     pub name: String,
-    pub wallet_type: WalletType,
-    pub balance: f64,  // Defaults to 0.00
+    pub wallet_type: String,          // "Cash", "BankAccount", "CreditCard", "Other"
+    pub balance: BigDecimal,          // BigDecimal
+    pub credit_limit: Option<BigDecimal>,  // NEW: Optional credit limit
 }
 ```
 
@@ -114,27 +159,28 @@ pub struct CreateWalletRequest {
 ```rust
 pub struct UpdateWalletRequest {
     pub name: Option<String>,
-    pub balance: Option<f64>,
+    pub balance: Option<BigDecimal>,  // BigDecimal
+    pub credit_limit: Option<BigDecimal>,  // NEW: Can update credit limit
 }
 ```
 
-**CreateTransactionRequest (Updated):**
+**CreateTransactionRequest (Enhanced):**
 ```rust
 pub struct CreateTransactionRequest {
     pub user_id: String,
-    pub wallet_id: String,  // NEW: Required
-    pub amount: f64,
-    pub transaction_type: String,
+    pub wallet_id: String,
+    pub amount: BigDecimal,           // BigDecimal - must be > 0
+    pub transaction_type: String,     // Must be "income" or "expense"
     pub category: String,
     pub description: String,
 }
 ```
 
-**UpdateTransactionRequest (Updated):**
+**UpdateTransactionRequest (Enhanced):**
 ```rust
 pub struct UpdateTransactionRequest {
-    pub wallet_id: Option<String>,     // NEW: Can change wallet
-    pub amount: Option<f64>,
+    pub wallet_id: Option<String>,
+    pub amount: Option<BigDecimal>,   // BigDecimal
     pub category: Option<String>,
     pub description: Option<String>,
 }
@@ -175,35 +221,119 @@ pub struct UpdateTransactionRequest {
 
 ## Updated Module: `transactions.rs`
 
+### Atomic Transaction Pattern
+
+All transaction operations use PostgreSQL atomic transactions for consistency:
+
+```rust
+// BEGIN database transaction
+let mut db_tx = db.begin().await?;
+
+// Fetch wallet and validate balance
+let wallet = fetch_wallet(&mut *db_tx, &wallet_id).await?;
+
+// Validate transaction type and amount
+if transaction_type not in ["income", "expense"] { error }
+if amount <= 0 { error }
+
+// Balance validation (wallet type specific)
+match wallet.wallet_type {
+    "CreditCard" => {
+        let available = wallet.credit_limit - wallet.balance;
+        if amount > available { return error }
+    },
+    _ => {
+        if transaction_type == "expense" && amount > wallet.balance {
+            return error
+        }
+    }
+}
+
+// Insert transaction
+insert_transaction(&mut *db_tx, transaction_data).await?;
+
+// Update wallet balance
+let delta = if transaction_type == "income" { amount } else { -amount };
+update_wallet_balance(&mut *db_tx, wallet_id, delta).await?;
+
+// COMMIT - all-or-nothing
+db_tx.commit().await?;
+
+// ROLLBACK if any error occurs (automatic on error)
+```
+
 ### Changes to Create Transaction
 
 1. **Wallet Validation:** Verifies wallet exists and belongs to user
-2. **Database Transaction:** Uses SQLx transaction for atomicity
-3. **Balance Update:** Automatically updates wallet balance:
-   - Income: `balance += amount`
-   - Expense: `balance -= amount`
-4. **Cache Invalidation:** Invalidates all wallet and transaction caches
-5. **Atomic Commit:** All-or-nothing operation
+2. **Type Validation:** Transaction type must be "income" or "expense"
+3. **Amount Validation:** Amount must be > 0
+4. **Balance Validation (NEW):**
+   - **CreditCard wallets:** Check available credit >= amount
+     - Available credit = credit_limit - balance
+     - Prevents over-spending beyond credit limit
+   - **Other wallets:** Check balance >= amount (for expenses)
+     - Prevents negative balance (except credit cards)
+5. **Atomic Database Operation:**
+   - Start transaction: `db.begin().await`
+   - Insert transaction record
+   - Update wallet balance: `balance += (income) or -= (expense)`
+   - Commit: `db_tx.commit().await`
+6. **Rollback on Error:** Automatic if validation fails or database error
+7. **Cache Invalidation:** Invalidates:
+   - Wallet-specific cache: `wallet:{user_id}:{wallet_id}`
+   - User wallet list cache: `wallets:{user_id}`
+   - User transactions cache: `transactions:{user_id}`
 
 ### Changes to Update Transaction
 
-1. **Current State Fetch:** Retrieves current transaction
+1. **Current State Fetch:** Retrieves current transaction within atomic transaction
 2. **Wallet Change Support:** If wallet_id changes:
-   - Reverses balance on old wallet
-   - Applies balance on new wallet
-3. **Amount Change Support:** If amount changes, applies delta to wallet
-4. **Transaction Safety:** Uses database transaction for consistency
-5. **Smart Cache Invalidation:** Invalidates affected wallets and transactions
+   - Calculates reverse delta for old wallet
+   - Calculates forward delta for new wallet
+   - Validates new wallet has sufficient balance/credit
+   - Updates both wallets atomically
+3. **Amount Change Support:** If amount changes:
+   - Calculates delta (new_amount - old_amount)
+   - Validates wallet can accommodate delta
+   - Updates wallet balance atomically
+4. **Type Preservation:** Transaction type cannot be changed
+5. **Transaction Safety:** All changes wrapped in atomic `db.begin()...db_tx.commit()`
+6. **Smart Cache Invalidation:** Invalidates:
+   - Old wallet cache (if changed)
+   - New wallet cache (if changed)
+   - Transaction cache
+   - User transaction list cache
 
 ### Changes to Delete Transaction
 
-1. **Transaction Fetch:** Retrieves transaction with wallet info
+1. **Transaction Fetch:** Retrieves transaction with all details within atomic transaction
 2. **Balance Reversal:** Reverses the transaction impact on wallet:
-   - Income: `balance -= amount`
-   - Expense: `balance += amount`
-3. **Transaction Deletion:** Removes transaction
+   - Income transaction: `balance -= amount` (removes income)
+   - Expense transaction: `balance += amount` (refunds expense)
+3. **Transaction Deletion:** Removes transaction from database
 4. **Atomic Operation:** All changes wrapped in database transaction
-5. **Cache Cleanup:** Invalidates all affected caches
+5. **Cache Cleanup:** Invalidates:
+   - Wallet cache
+   - User wallet list cache
+   - User transactions cache
+
+### Financial Precision
+
+All monetary calculations use `BigDecimal`:
+```rust
+let delta: BigDecimal = match transaction_type.as_str() {
+    "income" => req.amount.clone(),
+    "expense" => -&req.amount,
+    _ => return Err(...)
+};
+let new_balance = wallet.balance + delta;
+```
+
+**Benefits:**
+- No floating-point rounding errors
+- Accurate to 2 decimal places (cents)
+- Safe for financial calculations
+- Direct compatibility with database DECIMAL type
 
 ## Updated Module: `cache.rs`
 
@@ -263,19 +393,38 @@ mod wallets;  // NEW
 - Cascade delete removes transactions when wallet deleted
 - Database enforces user_id consistency
 
+### Atomic Operations (NEW)
+- **PostgreSQL Transactions:** All multi-step operations wrapped in `BEGIN...COMMIT`
+- **All-or-Nothing:** Either complete entire operation or rollback entirely
+- **Prevents Inconsistency:** No partial updates (e.g., transaction created but balance not updated)
+- **Automatic Rollback:** Any error triggers rollback, maintaining consistency
+
+### Balance Validation (NEW)
+- **CreditCard Wallets:** Available credit = limit - balance
+  - Cannot create transaction if amount > available credit
+  - Prevents overspending beyond credit limit
+- **Regular Wallets:** Balance >= 0 (for expenses)
+  - Cannot create expense if balance < amount
+  - Prevents negative balance
+- **BigDecimal Precision:** All calculations maintain financial accuracy
+
 ### Automatic Balance Updates
 - Atomic database transactions ensure consistency
 - Balance always reflects transaction history
 - No race conditions (single database write per transaction)
+- All-or-nothing: transaction creation + balance update succeed together or both fail
 
 ### Cache Invalidation Strategy
 - Invalidates transaction caches when wallets change
 - Invalidates wallet caches when transactions change
 - Pattern-based invalidation reduces residual cache
+- Wallet-specific invalidation for multi-wallet queries
 
 ### Constraints
 - Wallet balance constraint: `balance >= 0` (enforced in database)
-- Transaction amount constraint: `amount > 0`
+- Wallet credit_limit constraint: `credit_limit >= 0`
+- Transaction amount constraint: `amount > 0` (in application)
+- Transaction type constraint: Must be "income" or "expense"
 - Wallet type constraint: Must be one of 4 ENUM values
 - User_id consistency: Transactions must belong to wallet's user
 
