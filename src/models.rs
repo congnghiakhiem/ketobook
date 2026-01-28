@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::types::BigDecimal;
+use sqlx::types::chrono;
 
 // ==================== Wallet Models ====================
 
@@ -98,11 +99,11 @@ pub struct UpdateWalletRequest {
 pub struct Transaction {
     pub id: String,
     pub user_id: String,
-    pub wallet_id: Option<String>,
-    pub amount: BigDecimal,
+    pub wallet_id: String,  // Now required (not Option)
+    pub amount: BigDecimal,  // Updated to BigDecimal for precision
     pub transaction_type: String, // "income" or "expense"
     pub category: String,
-    pub description: String,
+    pub description: Option<String>,  // Made optional to match schema
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -132,10 +133,10 @@ pub struct Debt {
     pub id: String,
     pub user_id: String,
     pub creditor_name: String,
-    pub amount: f64,
-    pub interest_rate: f64,
-    pub due_date: DateTime<Utc>,
-    pub status: String, // "active" or "paid"
+    pub amount: BigDecimal,  // Updated to BigDecimal for precision
+    pub interest_rate: BigDecimal,  // Updated to BigDecimal
+    pub due_date: Option<DateTime<Utc>>,  // Made optional
+    pub status: String, // "active", "paid", or "cancelled"
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -144,16 +145,16 @@ pub struct Debt {
 pub struct CreateDebtRequest {
     pub user_id: String,
     pub creditor_name: String,
-    pub amount: f64,
-    pub interest_rate: f64,
-    pub due_date: DateTime<Utc>,
+    pub amount: BigDecimal,  // Updated to BigDecimal
+    pub interest_rate: Option<BigDecimal>,  // Made optional, defaults to 0
+    pub due_date: Option<DateTime<Utc>>,  // Made optional
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateDebtRequest {
     pub creditor_name: Option<String>,
-    pub amount: Option<f64>,
-    pub interest_rate: Option<f64>,
+    pub amount: Option<BigDecimal>,  // Updated to BigDecimal
+    pub interest_rate: Option<BigDecimal>,  // Updated to BigDecimal
     pub due_date: Option<DateTime<Utc>>,
     pub status: Option<String>,
 }

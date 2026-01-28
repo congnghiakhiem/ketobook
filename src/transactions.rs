@@ -251,7 +251,7 @@ pub async fn update_transaction(
     };
 
     // Determine new wallet and amount
-    let new_wallet_id = req.wallet_id.clone().unwrap_or_else(|| current_tx.wallet_id.clone().unwrap());
+    let new_wallet_id = req.wallet_id.clone().unwrap_or_else(|| current_tx.wallet_id.clone());
     let new_amount = req.amount.clone().unwrap_or_else(|| current_tx.amount.clone());
 
     // Validate new amount if changed
@@ -271,9 +271,9 @@ pub async fn update_transaction(
     };
 
     // If wallet or amount changed, reverse old balance and validate new balance
-    if new_wallet_id != *current_tx.wallet_id.as_ref().unwrap_or(&"".to_string()) || req.amount.is_some() {
+    if new_wallet_id != current_tx.wallet_id.clone() || req.amount.is_some() {
         // Reverse old wallet balance
-        let old_wallet_id = current_tx.wallet_id.clone().unwrap();
+        let old_wallet_id = current_tx.wallet_id.clone();
         let reverse_delta = match current_tx.transaction_type.as_str() {
             "income" => -current_tx.amount.clone(),
             "expense" => current_tx.amount.clone(),
@@ -451,29 +451,31 @@ pub async fn delete_transaction(
         }
     };
 
-    // Reverse wallet balance
-    if let Some(wallet_id) = &transaction.wallet_id {
-        let delta = match transaction.transaction_type.as_str() {
-            "income" => -transaction.amount.clone(),
-            "expense" => transaction.amount.clone(),
-            _ => {
-                let _ = db_tx.rollback().await;
-                return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("Invalid transaction type".to_string()));
-            }
-        };
-
-        if let Err(e) = sqlx::query("UPDATE wallets SET balance = balance + $1 WHERE id = $2")
-            .bind(&delta)
-            .bind(wallet_id)
-            .execute(&mut *db_tx)
-            .await
-        {
-            log::error!("Error reversing wallet balance: {}", e);
+    // Reverse wallet balance (wallet_id is now required, not Option)
+    let delta = match transaction.transaction_type.as_str() {
+        "income" => -transaction.amount.clone(),
+        "expense" => transaction.amount.clone(),
+        _ => {
             let _ = db_tx.rollback().await;
             return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("Failed to reverse balance".to_string()));
+                .json(ApiResponse::<String>::error("Invalid transaction type".to_string()));
         }
+    };
+
+    let reverse_result = sqlx::query(
+        "UPDATE wallets SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $2"
+    )
+    .bind(delta)
+    .bind(&transaction.wallet_id)
+    .execute(&mut *db_tx)
+    .await;
+
+    if let Err(e) = reverse_result {
+        log::error!("Error reversing wallet balance: {}", e);
+        let _ = db_tx.rollback().await;
+        return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error("Database error".to_string()));
     }
 
     // Delete transaction
