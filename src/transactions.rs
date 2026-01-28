@@ -9,6 +9,27 @@ use std::str::FromStr;
 use crate::models::{ApiResponse, CreateTransactionRequest, Transaction, UpdateTransactionRequest, Wallet, WalletType};
 use crate::cache::{get_or_set_cache, invalidate_cache_pattern};
 
+// ==================== ATOMIC TRANSACTION PATTERN EXAMPLE ====================
+// 
+// This module demonstrates PostgreSQL transaction handling with SQLx:
+// 
+// 1. BEGIN TRANSACTION: Start an atomic transaction
+// 2. INSERT/UPDATE operations within the transaction
+// 3. Validation: Check constraints and business rules
+// 4. COMMIT: Persist all changes atomically
+// 5. ROLLBACK (on error): Revert all changes if anything fails
+//
+// Example: When creating a transaction, we ensure wallet balance is updated
+// atomically with the transaction record creation. Both succeed or both fail.
+//
+// Key benefits:
+// - No partial updates: Either entire operation succeeds or nothing is modified
+// - Consistent state: Database never enters intermediate states
+// - Concurrent access safe: Multiple requests won't see inconsistent data
+// - Rollback on error: Any validation failure automatically reverts changes
+//
+// ============================================================================
+
 // ==================== CRUD Handlers ====================
 
 /// Get all transactions for a user (with caching)
@@ -516,6 +537,158 @@ pub async fn delete_transaction(
         }
     }
 }
+
+// ==================== ATOMIC TRANSACTION EXAMPLE ====================
+//
+// This handler demonstrates the complete atomic transaction pattern:
+// It creates a transaction record AND updates the wallet balance in
+// a single atomic PostgreSQL transaction.
+//
+// ```rust
+// /// Create a transaction with atomic wallet balance update
+// /// 
+// /// This example shows how to use PostgreSQL transactions to ensure
+// /// atomicity: either BOTH the transaction record is created AND the
+// /// wallet balance is updated, or NEITHER happens (automatic rollback on error).
+// pub async fn create_transaction_atomic_example(
+//     req: web::Json<CreateTransactionRequest>,
+//     db: web::Data<PgPool>,
+//     cache: web::Data<ConnectionManager>,
+// ) -> HttpResponse {
+//     let transaction_id = Uuid::new_v4().to_string();
+//     let now = Utc::now();
+//
+//     // Validate input
+//     if req.amount <= BigDecimal::from_str("0").unwrap() {
+//         return HttpResponse::BadRequest()
+//             .json(ApiResponse::<Transaction>::error("Amount must be greater than 0".to_string()));
+//     }
+//
+//     // STEP 1: Fetch wallet to validate balance
+//     let wallet: Option<Wallet> = match sqlx::query_as::<_, Wallet>(
+//         "SELECT id, user_id, name, balance, credit_limit, wallet_type, created_at, updated_at 
+//          FROM wallets WHERE id = $1 AND user_id = $2"
+//     )
+//     .bind(&req.wallet_id)
+//     .bind(&req.user_id)
+//     .fetch_optional(db.get_ref())
+//     .await {
+//         Ok(w) => w,
+//         Err(e) => {
+//             log::error!("Error fetching wallet: {}", e);
+//             return HttpResponse::InternalServerError()
+//                 .json(ApiResponse::<Transaction>::error("Database error".to_string()));
+//         }
+//     };
+//
+//     let wallet = match wallet {
+//         Some(w) => w,
+//         None => return HttpResponse::NotFound()
+//             .json(ApiResponse::<Transaction>::error("Wallet not found".to_string())),
+//     };
+//
+//     // Validate wallet has sufficient balance (for expense transactions)
+//     if req.transaction_type == "expense" && req.amount > wallet.balance {
+//         return HttpResponse::BadRequest()
+//             .json(ApiResponse::<Transaction>::error(
+//                 format!("Insufficient balance. Available: {}, Required: {}", wallet.balance, req.amount)
+//             ));
+//     }
+//
+//     // STEP 2: BEGIN ATOMIC TRANSACTION
+//     // All operations below are part of a single database transaction
+//     let mut db_tx = match db.begin().await {
+//         Ok(t) => t,
+//         Err(e) => {
+//             log::error!("Failed to begin database transaction: {}", e);
+//             return HttpResponse::InternalServerError()
+//                 .json(ApiResponse::<Transaction>::error("Failed to start transaction".to_string()));
+//         }
+//     };
+//
+//     // STEP 3: INSERT TRANSACTION RECORD
+//     let insert_result = sqlx::query_as::<_, Transaction>(
+//         "INSERT INTO transactions (id, user_id, wallet_id, amount, transaction_type, category, description, created_at, updated_at)
+//          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+//          RETURNING id, user_id, wallet_id, amount, transaction_type, category, description, created_at, updated_at"
+//     )
+//     .bind(&transaction_id)
+//     .bind(&req.user_id)
+//     .bind(&req.wallet_id)
+//     .bind(req.amount.clone())  // Clone because BigDecimal doesn't implement Copy
+//     .bind(&req.transaction_type)
+//     .bind(&req.category)
+//     .bind(&req.description)
+//     .bind(now)
+//     .bind(now)
+//     .fetch_one(&mut *db_tx)  // Execute within the transaction
+//     .await;
+//
+//     let transaction = match insert_result {
+//         Ok(t) => t,
+//         Err(e) => {
+//             log::error!("Error inserting transaction: {}", e);
+//             let _ = db_tx.rollback().await;  // Automatic rollback on error
+//             return HttpResponse::BadRequest()
+//                 .json(ApiResponse::<Transaction>::error("Failed to create transaction".to_string()));
+//         }
+//     };
+//
+//     // STEP 4: UPDATE WALLET BALANCE
+//     // Calculate the balance delta based on transaction type
+//     let balance_delta = match req.transaction_type.as_str() {
+//         "income" => req.amount.clone(),    // Add to balance for income
+//         "expense" => -req.amount.clone(),  // Subtract from balance for expense
+//         _ => {
+//             let _ = db_tx.rollback().await;
+//             return HttpResponse::BadRequest()
+//                 .json(ApiResponse::<Transaction>::error("Invalid transaction type".to_string()));
+//         }
+//     };
+//
+//     let update_result = sqlx::query(
+//         "UPDATE wallets SET balance = balance + $1, updated_at = $2 WHERE id = $3"
+//     )
+//     .bind(balance_delta)
+//     .bind(now)
+//     .bind(&req.wallet_id)
+//     .execute(&mut *db_tx)  // Execute within the transaction
+//     .await;
+//
+//     if let Err(e) = update_result {
+//         log::error!("Error updating wallet balance: {}", e);
+//         let _ = db_tx.rollback().await;  // Automatic rollback on error
+//         return HttpResponse::InternalServerError()
+//             .json(ApiResponse::<Transaction>::error("Failed to update wallet".to_string()));
+//     }
+//
+//     // STEP 5: COMMIT TRANSACTION
+//     // Both the transaction record AND wallet balance update are now persisted atomically
+//     if let Err(e) = db_tx.commit().await {
+//         log::error!("Failed to commit transaction: {}", e);
+//         return HttpResponse::InternalServerError()
+//             .json(ApiResponse::<Transaction>::error("Failed to save changes".to_string()));
+//     }
+//
+//     // STEP 6: INVALIDATE CACHE
+//     // Clear cached wallet and transaction data for this user
+//     let _ = invalidate_cache_pattern(&cache.get_ref(), &format!("wallet*{}*", req.user_id)).await;
+//     let _ = invalidate_cache_pattern(&cache.get_ref(), &format!("transactions:{}*", req.user_id)).await;
+//
+//     HttpResponse::Created().json(ApiResponse::success(transaction))
+// }
+// ```
+//
+// KEY POINTS:
+// - db.begin().await starts a transaction context
+// - All database operations use &mut *db_tx to stay within the transaction
+// - On ANY error, db_tx.rollback().await automatically reverts changes
+// - db_tx.commit().await persists both changes atomically
+// - If commit fails, all changes are lost (application's responsibility to retry)
+// - BigDecimal::clone() needed for binding (BigDecimal doesn't implement Copy)
+// - Cache invalidation happens AFTER successful commit
+//
+// ============================================================================
 
 // ==================== Database Functions ====================
 
