@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::types::BigDecimal;
+use uuid::Uuid;
 
 // ==================== Transaction Model ====================
 
@@ -15,9 +16,9 @@ use sqlx::types::BigDecimal;
 /// and cascade-delete when the wallet is deleted.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Transaction {
-    pub id: String,
+    pub id: Uuid,
     pub user_id: String,
-    pub wallet_id: String,                // Required FK to wallets
+    pub wallet_id: Uuid,                  // Required FK to wallets
     pub amount: BigDecimal,               // Always positive; type determines operation
     pub transaction_type: String,         // "income" or "expense"
     pub category: String,                 // Transaction category (e.g., groceries, salary)
@@ -32,7 +33,7 @@ pub struct Transaction {
 #[derive(Debug, Deserialize)]
 pub struct CreateTransactionRequest {
     pub user_id: String,
-    pub wallet_id: String,
+    pub wallet_id: Uuid,
     pub amount: BigDecimal,
     pub transaction_type: String,         // "income" or "expense"
     pub category: String,
@@ -42,7 +43,7 @@ pub struct CreateTransactionRequest {
 /// Request to update an existing transaction
 #[derive(Debug, Deserialize)]
 pub struct UpdateTransactionRequest {
-    pub wallet_id: Option<String>,
+    pub wallet_id: Option<Uuid>,
     pub amount: Option<BigDecimal>,
     pub category: Option<String>,
     pub description: Option<String>,

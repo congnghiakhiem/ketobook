@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::types::BigDecimal;
+use uuid::Uuid;
 
 // ==================== Debt Model ====================
 
@@ -13,9 +14,9 @@ use sqlx::types::BigDecimal;
 /// Debt is preserved even if associated wallet is deleted (FK uses ON DELETE SET NULL).
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Debt {
-    pub id: String,
+    pub id: Uuid,
     pub user_id: String,
-    pub wallet_id: Option<String>,        // Optional FK to wallets (SET NULL on delete)
+    pub wallet_id: Option<Uuid>,          // Optional FK to wallets (SET NULL on delete)
     pub creditor_name: String,            // Name of creditor (bank, person, company)
     pub amount: BigDecimal,               // Principal debt amount
     pub interest_rate: BigDecimal,        // Annual interest rate as percentage
@@ -31,7 +32,7 @@ pub struct Debt {
 #[derive(Debug, Deserialize)]
 pub struct CreateDebtRequest {
     pub user_id: String,
-    pub wallet_id: Option<String>,
+    pub wallet_id: Option<Uuid>,
     pub creditor_name: String,
     pub amount: BigDecimal,
     pub interest_rate: Option<BigDecimal>,

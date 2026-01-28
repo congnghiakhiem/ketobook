@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::types::BigDecimal;
+use uuid::Uuid;
 
 // ==================== WalletType Enum ====================
 
@@ -58,7 +59,7 @@ impl WalletType {
 /// - `available_balance()` = balance
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Wallet {
-    pub id: String,
+    pub id: Uuid,
     pub user_id: String,
     pub name: String,
     pub balance: BigDecimal,
