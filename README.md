@@ -28,7 +28,7 @@ src/
 
 ## 📋 Prerequisites
 
-- **Rust** 1.70+ (install from [rustup.rs](https://rustup.rs))
+- **Rust** 1.91.1 (specified in `rust-toolchain.toml`, install from [rustup.rs](https://rustup.rs))
 - **Supabase PostgreSQL** (free tier at [supabase.com](https://supabase.com)) or local PostgreSQL
 - **Upstash Redis** (free tier available at [upstash.com](https://upstash.com)) or local Redis
 

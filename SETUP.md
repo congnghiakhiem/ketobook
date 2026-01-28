@@ -4,16 +4,22 @@ This guide walks you through setting up the KetoBook Finance Management API from
 
 ## 1. Prerequisites Installation
 
-### Rust Installation
+### Rust Installation (Version 1.91.1 Required)
 ```bash
 # Install Rust and Cargo
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 
+# Install Rust 1.91.1 (required for this project)
+rustup install 1.91.1
+rustup default 1.91.1
+
 # Verify installation
-rustc --version
+rustc --version  # Should show 1.91.1
 cargo --version
 ```
+
+**Note**: The project includes `rust-toolchain.toml` that specifies version 1.91.1. This ensures consistency across all developers.
 
 ### PostgreSQL Installation (Using Supabase)
 
