@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use sqlx::types::BigDecimal;
 
 // ==================== Wallet Models ====================
 
@@ -35,6 +35,10 @@ impl WalletType {
             _ => None,
         }
     }
+
+    pub fn is_credit_card(&self) -> bool {
+        matches!(self, WalletType::CreditCard)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -42,10 +46,33 @@ pub struct Wallet {
     pub id: String,
     pub user_id: String,
     pub name: String,
-    pub balance: f64,
+    pub balance: BigDecimal,
+    pub credit_limit: Option<BigDecimal>,
     pub wallet_type: String, // Stored as string from database
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl Wallet {
+    /// Get wallet type enum from string
+    pub fn wallet_type_enum(&self) -> Option<WalletType> {
+        WalletType::from_str(&self.wallet_type)
+    }
+
+    /// For credit cards: available balance = credit_limit - balance
+    /// For others: available balance = balance
+    pub fn available_balance(&self) -> BigDecimal {
+        if let Some(limit) = &self.credit_limit {
+            if self.wallet_type == "CreditCard" {
+                // balance represents current debt, so available = limit - debt
+                limit - &self.balance
+            } else {
+                self.balance.clone()
+            }
+        } else {
+            self.balance.clone()
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,13 +81,15 @@ pub struct CreateWalletRequest {
     pub name: String,
     pub wallet_type: WalletType,
     #[serde(default)]
-    pub balance: f64,
+    pub balance: BigDecimal,
+    pub credit_limit: Option<BigDecimal>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateWalletRequest {
     pub name: Option<String>,
-    pub balance: Option<f64>,
+    pub balance: Option<BigDecimal>,
+    pub credit_limit: Option<BigDecimal>,
 }
 
 // ==================== Transaction Models ====================
@@ -70,7 +99,7 @@ pub struct Transaction {
     pub id: String,
     pub user_id: String,
     pub wallet_id: Option<String>,
-    pub amount: f64,
+    pub amount: BigDecimal,
     pub transaction_type: String, // "income" or "expense"
     pub category: String,
     pub description: String,
@@ -82,7 +111,7 @@ pub struct Transaction {
 pub struct CreateTransactionRequest {
     pub user_id: String,
     pub wallet_id: String,
-    pub amount: f64,
+    pub amount: BigDecimal,
     pub transaction_type: String,
     pub category: String,
     pub description: String,
@@ -91,7 +120,7 @@ pub struct CreateTransactionRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateTransactionRequest {
     pub wallet_id: Option<String>,
-    pub amount: Option<f64>,
+    pub amount: Option<BigDecimal>,
     pub category: Option<String>,
     pub description: Option<String>,
 }

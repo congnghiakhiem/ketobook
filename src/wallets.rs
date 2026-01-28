@@ -65,15 +65,16 @@ pub async fn create_wallet(
 
     let query_result = sqlx::query_as::<_, Wallet>(
         r#"
-        INSERT INTO wallets (id, user_id, name, balance, wallet_type)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, user_id, name, balance, wallet_type, created_at, updated_at
+        INSERT INTO wallets (id, user_id, name, balance, credit_limit, wallet_type)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, user_id, name, balance, credit_limit, wallet_type, created_at, updated_at
         "#,
     )
     .bind(&wallet_id)
     .bind(&req.user_id)
     .bind(&req.name)
-    .bind(req.balance)
+    .bind(&req.balance)
+    .bind(&req.credit_limit)
     .bind(wallet_type_str)
     .fetch_one(db.get_ref())
     .await;
@@ -81,8 +82,9 @@ pub async fn create_wallet(
     match query_result {
         Ok(wallet) => {
             // Invalidate user's wallets cache
+            let mut cache_clone = cache.get_ref().clone();
             let pattern = format!("wallets:{}", req.user_id);
-            let _ = invalidate_cache_pattern(&cache.get_ref(), &pattern).await;
+            let _ = invalidate_cache_pattern(&mut cache_clone, &pattern).await;
 
             HttpResponse::Created().json(ApiResponse::success(wallet))
         }
@@ -106,13 +108,14 @@ pub async fn update_wallet(
     let query_result = sqlx::query_as::<_, Wallet>(
         r#"
         UPDATE wallets
-        SET name = COALESCE($1, name), balance = COALESCE($2, balance)
-        WHERE id = $3 AND user_id = $4
-        RETURNING id, user_id, name, balance, wallet_type, created_at, updated_at
+        SET name = COALESCE($1, name), balance = COALESCE($2, balance), credit_limit = COALESCE($3, credit_limit)
+        WHERE id = $4 AND user_id = $5
+        RETURNING id, user_id, name, balance, credit_limit, wallet_type, created_at, updated_at
         "#,
     )
     .bind(&req.name)
     .bind(&req.balance)
+    .bind(&req.credit_limit)
     .bind(&wallet_id)
     .bind(&user_id)
     .fetch_optional(db.get_ref())
@@ -121,8 +124,9 @@ pub async fn update_wallet(
     match query_result {
         Ok(Some(wallet)) => {
             // Invalidate relevant caches
+            let mut cache_clone = cache.get_ref().clone();
             let pattern = format!("wallet{}:*", user_id);
-            let _ = invalidate_cache_pattern(&cache.get_ref(), &pattern).await;
+            let _ = invalidate_cache_pattern(&mut cache_clone, &pattern).await;
 
             HttpResponse::Ok().json(ApiResponse::success(wallet))
         }
@@ -156,8 +160,9 @@ pub async fn delete_wallet(
         Ok(result) => {
             if result.rows_affected() > 0 {
                 // Invalidate relevant caches
+                let mut cache_clone = cache.get_ref().clone();
                 let pattern = format!("wallet{}:*", user_id);
-                let _ = invalidate_cache_pattern(&cache.get_ref(), &pattern).await;
+                let _ = invalidate_cache_pattern(&mut cache_clone, &pattern).await;
 
                 HttpResponse::NoContent().finish()
             } else {
@@ -177,7 +182,7 @@ pub async fn delete_wallet(
 
 async fn fetch_wallets_from_db(pool: &PgPool, user_id: &str) -> Result<Vec<Wallet>, sqlx::Error> {
     sqlx::query_as::<_, Wallet>(
-        "SELECT id, user_id, name, balance, wallet_type, created_at, updated_at FROM wallets WHERE user_id = $1 ORDER BY created_at DESC",
+        "SELECT id, user_id, name, balance, credit_limit, wallet_type, created_at, updated_at FROM wallets WHERE user_id = $1 ORDER BY created_at DESC",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -190,7 +195,7 @@ async fn fetch_wallet_by_id(
     user_id: &str,
 ) -> Result<Wallet, sqlx::Error> {
     sqlx::query_as::<_, Wallet>(
-        "SELECT id, user_id, name, balance, wallet_type, created_at, updated_at FROM wallets WHERE id = $1 AND user_id = $2",
+        "SELECT id, user_id, name, balance, credit_limit, wallet_type, created_at, updated_at FROM wallets WHERE id = $1 AND user_id = $2",
     )
     .bind(wallet_id)
     .bind(user_id)
