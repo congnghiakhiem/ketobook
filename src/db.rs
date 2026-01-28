@@ -1,6 +1,7 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
+#[derive(Clone)]
 pub struct DbPool(pub PgPool);
 
 impl DbPool {

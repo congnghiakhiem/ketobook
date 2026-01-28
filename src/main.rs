@@ -4,6 +4,7 @@ mod db;
 mod debts;
 mod models;
 mod transactions;
+mod wallets;
 
 use actix_web::{web, App, HttpServer, middleware};
 use cache::CacheManager;
@@ -44,6 +45,8 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(cache_manager.get_connection_manager().clone()))
             // Health check endpoint
             .route("/health", web::get().to(health_check))
+            // Configure wallet routes
+            .configure(wallets::configure_routes)
             // Configure transaction routes
             .configure(transactions::configure_routes)
             // Configure debt routes

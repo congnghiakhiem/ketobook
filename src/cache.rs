@@ -1,6 +1,7 @@
 use redis::aio::ConnectionManager;
 use redis::Client;
 
+#[derive(Clone)]
 pub struct CacheManager(pub ConnectionManager);
 
 impl CacheManager {
@@ -22,6 +23,7 @@ pub async fn get_or_set_cache<T: serde::Serialize + serde::de::DeserializeOwned>
     fetch_fn: impl std::future::Future<Output = Result<T, sqlx::Error>>,
 ) -> Result<T, CacheError> {
     use redis::AsyncCommands;
+    let mut cache = cache.clone();
 
     // Try to get from cache
     match cache.get::<&str, String>(key).await {
@@ -53,7 +55,8 @@ pub async fn get_or_set_cache<T: serde::Serialize + serde::de::DeserializeOwned>
 // Invalidate cache by key
 pub async fn invalidate_cache(cache: &ConnectionManager, key: &str) -> Result<(), redis::RedisError> {
     use redis::AsyncCommands;
-    cache.del(key).await?;
+    let mut cache = cache.clone();
+    let _: () = cache.del(key).await?;
     log::info!("Cache invalidated for key: {}", key);
     Ok(())
 }
@@ -64,11 +67,33 @@ pub async fn invalidate_cache_pattern(
     pattern: &str,
 ) -> Result<(), redis::RedisError> {
     use redis::AsyncCommands;
+    let mut cache = cache.clone();
     let keys: Vec<String> = cache.keys(pattern).await?;
     if !keys.is_empty() {
-        cache.del(keys).await?;
+        let _: () = cache.del(keys).await?;
         log::info!("Cache invalidated for pattern: {}", pattern);
     }
+    Ok(())
+}
+
+// Invalidate all cache for a user (transactions and wallets)
+pub async fn invalidate_user_cache(
+    cache: &ConnectionManager,
+    user_id: &str,
+) -> Result<(), redis::RedisError> {
+    let patterns = vec![
+        format!("transactions:{}*", user_id),
+        format!("transaction{}:*", user_id),
+        format!("wallets:{}*", user_id),
+        format!("wallet{}:*", user_id),
+        format!("wallet:{}*", user_id),
+    ];
+
+    for pattern in patterns {
+        invalidate_cache_pattern(cache, &pattern).await?;
+    }
+
+    log::info!("All cache invalidated for user: {}", user_id);
     Ok(())
 }
 

@@ -136,9 +136,89 @@ SERVER_PORT=8080
 RUST_LOG=info
 ```
 
-## 3. Database Setup
+## 3. Database Setup with SQLx Migrations
 
-### Create Database
+### Install SQLx CLI
+
+```bash
+# Install SQLx CLI (required for running migrations)
+cargo install sqlx-cli --no-default-features --features postgres
+
+# Verify installation
+sqlx --version
+```
+
+### Update .env with Database URL
+
+Edit your `.env` file with Supabase credentials:
+
+```env
+# For Supabase
+DATABASE_URL=postgresql://postgres:<password>@<ref>.supabase.co:5432/postgres
+
+# For local PostgreSQL
+DATABASE_URL=postgresql://postgres:password@localhost:5432/ketobook_db
+```
+
+### Run Database Migrations
+
+```bash
+# Navigate to project directory
+cd c:\Projects\ketobook
+
+# Run all migrations
+sqlx migrate run
+
+# You should see:
+# Applied 20250128_create_transactions_table
+# Applied 20250128_create_debts_table
+# Applied 20250128_create_views
+```
+
+**For Supabase**, the migrations create:
+- `transactions` table for income/expense tracking
+- `debts` table for loan management
+- Indexes for optimal query performance
+- Auto-updating timestamp triggers
+- Aggregation views for summaries
+
+### Verify Migrations
+
+Connect to your database and check tables were created:
+
+```bash
+# Connect to your database
+psql "your-database-url"
+
+# List tables (should show transactions and debts)
+\dt
+
+# List views (should show v_transaction_summary and v_debt_summary)
+\dv
+
+# List triggers (should show auto-update triggers)
+\dy
+```
+
+### Alternative: Manual Migration
+
+If SQLx CLI isn't available, manually run the SQL files:
+
+```bash
+# For Supabase via SQL Editor
+# 1. Go to Supabase Dashboard
+# 2. Click "SQL Editor" → "New Query"
+# 3. Copy contents from migrations/20250128_create_transactions_table.sql
+# 4. Click "Run"
+# 5. Repeat for other migration files
+
+# Or via psql
+psql "your-database-url" < migrations/20250128_create_transactions_table.sql
+psql "your-database-url" < migrations/20250128_create_debts_table.sql
+psql "your-database-url" < migrations/20250128_create_views.sql
+```
+
+## 4. Previous: Manual Database Setup
 ```bash
 # Using psql
 psql -U postgres
