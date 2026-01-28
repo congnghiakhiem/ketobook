@@ -1,6 +1,6 @@
 # KetoBook Finance Management API
 
-A modern, scalable finance management API built with **Actix-web**, **Supabase PostgreSQL**, and **Upstash Redis**. This project implements a cache-aside pattern for optimal performance while managing personal transactions and debts.
+A modern, scalable finance management API built with **Actix-web**, **Supabase PostgreSQL**, and **Upstash Redis**. Featuring **multi-wallet support**, **credit card management**, **atomic transactions**, and **financial precision** with BigDecimal. Implements cache-aside pattern for optimal performance while managing personal transactions, multiple wallets, and debts.
 
 ## 🏗️ Architecture
 
@@ -9,17 +9,24 @@ A modern, scalable finance management API built with **Actix-web**, **Supabase P
 src/
 ├── main.rs           # Server setup and route registration
 ├── config.rs         # Environment configuration (dotenv)
-├── models.rs         # Data models with serde serialization
+├── models.rs         # Data models with BigDecimal financial precision
 ├── db.rs             # PostgreSQL connection pool management
 ├── cache.rs          # Redis connection and cache-aside pattern
-├── transactions.rs   # Transaction CRUD endpoints
+├── wallets.rs        # Wallet CRUD endpoints (NEW)
+├── transactions.rs   # Transaction CRUD with atomic operations (ENHANCED)
 └── debts.rs          # Debt CRUD endpoints
 ```
 
 ### Key Features
 
+- **Multi-Wallet Support**: Manage multiple wallets (Cash, Bank Account, Credit Card, Other)
+- **Credit Card Management**: Track credit cards with credit limits and available credit
+- **Atomic Transactions**: All transaction operations use PostgreSQL atomic transactions (BEGIN/COMMIT/ROLLBACK)
+- **Financial Precision**: BigDecimal for monetary values (no floating-point errors)
+- **Smart Balance Validation**: Different validation logic for credit cards vs regular wallets
+- **Automatic Balance Updates**: Wallet balances automatically updated when transactions change
 - **Async/Await**: Built with Tokio runtime for high concurrency
-- **Cache-Aside Pattern**: Redis integration checks cache first, then database
+- **Cache-Aside Pattern**: Redis integration with wallet-specific invalidation
 - **Type-Safe Database Access**: SQLx for compile-time SQL verification
 - **RESTful API**: Clean endpoint design with standardized responses
 - **Modular Design**: Separated concerns with independent modules
@@ -112,7 +119,50 @@ Server will start at `http://127.0.0.1:8080`
 GET /health
 ```
 
-### Transactions
+### Wallets (NEW)
+
+#### Get all wallets for a user
+```bash
+GET /api/wallets/user/{user_id}
+```
+
+#### Get single wallet
+```bash
+GET /api/wallets/{user_id}/{wallet_id}
+```
+
+#### Create wallet (all types)
+```bash
+POST /api/wallets
+Content-Type: application/json
+
+{
+  "user_id": "user_123",
+  "name": "My Credit Card",
+  "wallet_type": "CreditCard",
+  "balance": "2500.00",
+  "credit_limit": "10000.00"
+}
+```
+
+#### Update wallet
+```bash
+PUT /api/wallets/{user_id}/{wallet_id}
+Content-Type: application/json
+
+{
+  "name": "Primary Credit Card",
+  "balance": "2750.00",
+  "credit_limit": "15000.00"
+}
+```
+
+#### Delete wallet
+```bash
+DELETE /api/wallets/{user_id}/{wallet_id}
+```
+
+### Transactions (ENHANCED with Atomic Operations)
 
 #### Get all transactions for a user
 ```bash
@@ -124,35 +174,45 @@ GET /api/transactions/user/{user_id}
 GET /api/transactions/{user_id}/{transaction_id}
 ```
 
-#### Create transaction
+#### Create transaction (now with wallet requirement and balance validation)
 ```bash
 POST /api/transactions
 Content-Type: application/json
 
 {
   "user_id": "user_123",
-  "amount": 50.00,
+  "wallet_id": "wallet_uuid",
+  "amount": "50.00",
   "transaction_type": "expense",
   "category": "groceries",
   "description": "Weekly grocery shopping"
 }
+
+# Atomic operation: Transaction created + wallet balance updated in single unit
+# For credit cards: validates available_credit >= amount
+# For regular wallets: validates balance >= amount (for expenses)
 ```
 
-#### Update transaction
+#### Update transaction (can change wallet and amount)
 ```bash
 PUT /api/transactions/{user_id}/{transaction_id}
 Content-Type: application/json
 
 {
-  "amount": 75.00,
+  "wallet_id": "different_wallet_id",
+  "amount": "75.00",
   "category": "food",
   "description": "Updated description"
 }
+
+# Atomic: Old wallet balance reversed + new wallet balance applied
 ```
 
 #### Delete transaction
 ```bash
 DELETE /api/transactions/{user_id}/{transaction_id}
+
+# Atomic: Transaction deleted + balance reversal in single unit
 ```
 
 ### Debts
@@ -209,17 +269,90 @@ The application implements the cache-aside pattern across all read operations:
 
 **Write operations** invalidate relevant cache keys to maintain data consistency:
 - Create/Update/Delete operations clear the cache
+- **Wallet-specific invalidation**: Updates to one wallet only clear that wallet's cache
 - Pattern-based invalidation ensures all related caches are cleared
+
+## ⚛️ Atomic Transactions
+
+All transaction operations (create, update, delete) use PostgreSQL atomic transactions:
+
+- **BEGIN/COMMIT/ROLLBACK**: All changes succeed or fail together
+- **No partial updates**: Transaction creation and balance update are atomic
+- **Automatic rollback**: Any error rolls back all changes
+- **Balance consistency**: Wallet balance always matches transaction history
+
+**Example atomicity scenario:**
+```
+1. Customer creates $500 expense on credit card
+2. System begins database transaction
+3. Validates: available_credit ($7500) >= $500 ✓
+4. Inserts transaction record
+5. Updates wallet: balance = $2500 + $500 = $3000 (more debt)
+6. Commits both changes atomically
+   → If commit fails: BOTH changes rolled back
+   → Wallet balance unchanged, transaction never created
+```
+
+## 💰 Financial Precision
+
+All monetary values use **BigDecimal** instead of floating-point:
+
+- **Accuracy**: Exact to 2 decimal places (cents)
+- **No rounding errors**: 0.1 + 0.2 = 0.3 exactly
+- **Safe arithmetic**: All financial calculations precise
+- **Database alignment**: Matches DECIMAL(15, 2) columns
+- **JSON serialization**: Represented as strings for precision
+
+**Example:**
+```json
+{
+  "balance": "5000.50",
+  "credit_limit": "10000.00",
+  "amount": "75.25"
+}
+```
+
+## 🏦 Multi-Wallet Types
+
+Supported wallet types with different balance semantics:
+
+| Type | Balance Meaning | Validation | Use Case |
+|------|-----------------|-----------|----------|
+| **Cash** | Amount of cash | Cannot go negative | Physical cash |
+| **BankAccount** | Account balance | Cannot go negative | Checking/savings |
+| **CreditCard** | Current debt | Available credit ≥ amount | Credit cards |
+| **Other** | Custom balance | Cannot go negative | Other accounts |
+
+**Credit Card Specifics:**
+- `balance` field = current debt (0 = no debt, limit = maxed out)
+- `credit_limit` field = spending limit
+- `available_credit` = limit - balance (calculated property)
+- Expense transactions validated: `amount <= available_credit`
+- Income transactions reduce debt: `balance -= amount`
 
 ## 🗄️ Database Schema
 
-The application expects the following tables:
+The application uses PostgreSQL with the following tables:
 
 ```sql
+-- Wallets table (NEW)
+CREATE TABLE wallets (
+  id VARCHAR PRIMARY KEY,
+  user_id VARCHAR NOT NULL,
+  name VARCHAR(100) NOT NULL,
+  balance DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
+  credit_limit DECIMAL(15, 2) DEFAULT 0.00,
+  wallet_type VARCHAR NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL
+);
+
+-- Transactions table (UPDATED)
 CREATE TABLE transactions (
   id VARCHAR PRIMARY KEY,
   user_id VARCHAR NOT NULL,
-  amount DECIMAL(10, 2) NOT NULL,
+  wallet_id VARCHAR NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+  amount DECIMAL(15, 2) NOT NULL,
   transaction_type VARCHAR NOT NULL,
   category VARCHAR NOT NULL,
   description VARCHAR,
@@ -227,11 +360,12 @@ CREATE TABLE transactions (
   updated_at TIMESTAMP NOT NULL
 );
 
+-- Debts table
 CREATE TABLE debts (
   id VARCHAR PRIMARY KEY,
   user_id VARCHAR NOT NULL,
   creditor_name VARCHAR NOT NULL,
-  amount DECIMAL(10, 2) NOT NULL,
+  amount DECIMAL(15, 2) NOT NULL,
   interest_rate DECIMAL(5, 2) NOT NULL,
   due_date TIMESTAMP NOT NULL,
   status VARCHAR NOT NULL,
@@ -239,7 +373,10 @@ CREATE TABLE debts (
   updated_at TIMESTAMP NOT NULL
 );
 
+CREATE INDEX idx_wallets_user_id ON wallets(user_id);
+CREATE INDEX idx_wallets_credit_card ON wallets(user_id, wallet_type) WHERE wallet_type = 'CreditCard';
 CREATE INDEX idx_transactions_user_id ON transactions(user_id);
+CREATE INDEX idx_transactions_wallet_id ON transactions(wallet_id);
 CREATE INDEX idx_debts_user_id ON debts(user_id);
 ```
 
@@ -249,7 +386,8 @@ Key dependencies in `Cargo.toml`:
 
 - **actix-web** (4.0) - Web framework
 - **tokio** - Async runtime
-- **sqlx** (0.7) - Database driver with async support
+- **sqlx** (0.7) - Database driver with async support and BigDecimal feature
+- **bigdecimal** (0.3) - Financial precision with serde support
 - **redis** (0.25) - Redis client with async support
 - **serde** - JSON serialization/deserialization
 - **chrono** - Date/time handling
@@ -374,11 +512,32 @@ This project is licensed under the MIT License. See LICENSE file for details.
 - No runtime string parsing
 - Better error messages
 - Excellent PostgreSQL support
+- BigDecimal support for financial precision
+
+**Why BigDecimal?**
+- Accurate financial calculations (no 0.1 + 0.2 = 0.30000000000000004)
+- Exact to 2 decimal places (cents)
+- Matches database DECIMAL(15, 2) type
+- Essential for money operations
+
+**Why Atomic Transactions?**
+- Guarantees consistency: Transaction + balance update always together
+- Prevents partial updates: Either both succeed or both fail
+- Automatic rollback: Error rolls back all changes
+- Critical for financial systems
 
 **Why Redis + Postgres?**
 - Hot data in Redis for sub-millisecond access
 - Persistent data in PostgreSQL for durability
 - Easy invalidation strategy with cache-aside pattern
+- Wallet-specific caching for multi-wallet optimization
+
+## 🚀 Quick Links
+
+- **API Reference**: See [API_WALLET_REFERENCE.md](API_WALLET_REFERENCE.md) for detailed endpoint documentation
+- **Setup Guide**: See [SETUP.md](SETUP.md) for installation instructions
+- **Implementation Details**: See [WALLET_REFACTOR_SUMMARY.md](WALLET_REFACTOR_SUMMARY.md) for technical architecture
+- **Checklist**: See [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md) for feature status
 
 ---
 
